@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { analyticsApi, optimizationApi, PRIORITY_META, sprintApi, STATUS_META, taskApi } from "../api/axios.js";
 import Button from "../components/common/Button.jsx";
@@ -24,6 +24,61 @@ function SprintView() {
     risk: 0.2,
   });
   const [saving, setSaving] = useState(false);
+  const [alert, setAlert] = useState({ message: "", type: "", visible: false });
+  const alertTimeoutRef = useRef(null);
+  const [draggedTask, setDraggedTask] = useState(null);
+
+  const handleDragStart = (event, task) => {
+    setDraggedTask(task);
+    event.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  };
+
+  const handleDrop = async (event, newStatus) => {
+    event.preventDefault();
+    if (!draggedTask || draggedTask.status === newStatus) {
+      return;
+    }
+
+    const taskId = draggedTask.id;
+    setDraggedTask(null);
+
+    // Optimistic update
+    const previousTasks = [...tasks];
+    setTasks((prevTasks) =>
+      prevTasks.map((task) => (task.id === taskId ? { ...task, status: newStatus } : task)),
+    );
+
+    try {
+      await taskApi.updateTaskStatus(taskId, newStatus);
+    } catch {
+      setTasks(previousTasks);
+      showAlert("Failed to update task status. Please try again.", "error");
+    }
+  };
+
+  const showAlert = (message, type = "success") => {
+    setAlert({ message, type, visible: true });
+    if (alertTimeoutRef.current) {
+      window.clearTimeout(alertTimeoutRef.current);
+    }
+    alertTimeoutRef.current = window.setTimeout(() => {
+      setAlert((prev) => ({ ...prev, visible: false }));
+      alertTimeoutRef.current = null;
+    }, 3000);
+  };
+
+  const hideAlert = () => {
+    setAlert((prev) => ({ ...prev, visible: false }));
+    if (alertTimeoutRef.current) {
+      window.clearTimeout(alertTimeoutRef.current);
+      alertTimeoutRef.current = null;
+    }
+  };
 
   const loadSprint = useCallback(async () => {
     const [sprintData, sprintTasks, analyticsData, optimizationData] = await Promise.all([
@@ -114,11 +169,6 @@ function SprintView() {
     }
   };
 
-  const handleStatusUpdate = async (taskId, status) => {
-    await taskApi.updateTaskStatus(taskId, status);
-    await loadSprint();
-  };
-
   if (loading) {
     return (
       <div className="page">
@@ -141,6 +191,14 @@ function SprintView() {
 
   return (
     <div className="page">
+      {alert.visible ? (
+        <div className={`project-alert project-alert-${alert.type}`} role="status">
+          <span>{alert.message}</span>
+          <button type="button" onClick={hideAlert} aria-label="Dismiss notification">
+            ×
+          </button>
+        </div>
+      ) : null}
       <div className="page-header">
         <div>
           <p className="eyebrow">Sprint Execution</p>
@@ -301,27 +359,26 @@ function SprintView() {
       <Card title="Sprint Board" subtitle="Task flow across delivery states">
         <div className="kanban">
           {columnOrder.map((status) => (
-            <section key={status} className="kanban-column">
+            <section
+              key={status}
+              className={`kanban-column kanban-column-${status.toLowerCase()}`}
+              onDragOver={handleDragOver}
+              onDrop={(event) => handleDrop(event, status)}
+            >
               <header>
                 <h4>{statusToLabel(status)}</h4>
                 <span>{groupedTasks[status]?.length ?? 0}</span>
               </header>
               <div className="kanban-list">
                 {groupedTasks[status]?.map((task) => (
-                  <article key={task.id} className="kanban-card">
+                  <article
+                    key={task.id}
+                    className={`kanban-card kanban-card-${status.toLowerCase()}`}
+                    draggable
+                    onDragStart={(event) => handleDragStart(event, task)}
+                  >
                     <p>{task.title}</p>
                     <span>{task.storyPoints} pts</span>
-                    <select
-                      className="filter-select"
-                      value={task.status}
-                      onChange={(event) => handleStatusUpdate(task.id, event.target.value)}
-                    >
-                      {columnOrder.map((option) => (
-                        <option key={option} value={option}>
-                          {statusToLabel(option)}
-                        </option>
-                      ))}
-                    </select>
                     <div className="kanban-tags">
                       <span className={`badge ${PRIORITY_META[task.priority]?.className}`}>{task.priority}</span>
                       <span className="badge status-muted">Risk {(task.risk?.score ?? 0).toFixed(2)}</span>

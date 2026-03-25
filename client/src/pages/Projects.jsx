@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { projectApi, STATUS_META } from "../api/axios.js";
 import Card from "../components/common/Card.jsx";
@@ -21,6 +21,27 @@ function Projects() {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [formMode, setFormMode] = useState(null);
+  const [alert, setAlert] = useState({ message: "", type: "", visible: false });
+  const alertTimeoutRef = useRef(null);
+
+  const showAlert = (message, type = "success") => {
+    setAlert({ message, type, visible: true });
+    if (alertTimeoutRef.current) {
+      window.clearTimeout(alertTimeoutRef.current);
+    }
+    alertTimeoutRef.current = window.setTimeout(() => {
+      setAlert((prev) => ({ ...prev, visible: false }));
+      alertTimeoutRef.current = null;
+    }, 3000);
+  };
+
+  const hideAlert = () => {
+    setAlert((prev) => ({ ...prev, visible: false }));
+    if (alertTimeoutRef.current) {
+      window.clearTimeout(alertTimeoutRef.current);
+      alertTimeoutRef.current = null;
+    }
+  };
   const [formValues, setFormValues] = useState(emptyProjectForm);
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -117,13 +138,16 @@ function Projects() {
     try {
       if (formMode === "create") {
         await projectApi.createProject(formValues);
+        showAlert("Project created successfully.");
       } else if (formMode === "edit" && activeProjectId) {
         await projectApi.updateProject(activeProjectId, formValues);
+        showAlert("Project updated successfully.");
       }
       await loadProjects();
       closeForm();
     } catch {
-      setActionError("Project update failed. Please try again.");
+      setActionError("Project save failed. Please try again.");
+      showAlert("Project save failed. Please try again.", "error");
     } finally {
       setSubmitting(false);
     }
@@ -135,12 +159,25 @@ function Projects() {
       return;
     }
 
-    await projectApi.deleteProject(projectId);
-    await loadProjects();
+    try {
+      await projectApi.deleteProject(projectId);
+      await loadProjects();
+      showAlert("Project deleted successfully.");
+    } catch {
+      showAlert("Project delete failed. Please try again.", "error");
+    }
   };
 
   return (
     <div className="page">
+      {alert.visible ? (
+        <div className={`project-alert project-alert-${alert.type}`} role="status">
+          <span>{alert.message}</span>
+          <button type="button" onClick={hideAlert} aria-label="Dismiss notification">
+            ×
+          </button>
+        </div>
+      ) : null}
       <div className="page-header">
         <div>
           <p className="eyebrow">Project Portfolio</p>
