@@ -27,6 +27,9 @@ function SprintView() {
   const [alert, setAlert] = useState({ message: "", type: "", visible: false });
   const alertTimeoutRef = useRef(null);
   const [draggedTask, setDraggedTask] = useState(null);
+  const [syncingInsights, setSyncingInsights] = useState(false);
+  const [statusUpdating, setStatusUpdating] = useState(false);
+  const [bulkCompleting, setBulkCompleting] = useState(false);
 
   const handleDragStart = (event, task) => {
     setDraggedTask(task);
@@ -36,29 +39,6 @@ function SprintView() {
   const handleDragOver = (event) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
-  };
-
-  const handleDrop = async (event, newStatus) => {
-    event.preventDefault();
-    if (!draggedTask || draggedTask.status === newStatus) {
-      return;
-    }
-
-    const taskId = draggedTask.id;
-    setDraggedTask(null);
-
-    // Optimistic update
-    const previousTasks = [...tasks];
-    setTasks((prevTasks) =>
-      prevTasks.map((task) => (task.id === taskId ? { ...task, status: newStatus } : task)),
-    );
-
-    try {
-      await taskApi.updateTaskStatus(taskId, newStatus);
-    } catch {
-      setTasks(previousTasks);
-      showAlert("Failed to update task status. Please try again.", "error");
-    }
   };
 
   const showAlert = (message, type = "success") => {
@@ -91,7 +71,15 @@ function SprintView() {
     setSprint(sprintData);
     setTasks(sprintTasks);
     setAnalytics(analyticsData);
-    setOptimization(optimizationData);
+    setOptimization(
+      optimizationData ?? {
+        recommendedTasks: [],
+        predictedSuccessProbability: 0,
+        totalStoryPoints: 0,
+        capacityUtilization: 0,
+        feasibilityScore: 0,
+      },
+    );
     if (sprintData?.id) {
       localStorage.setItem("beacon:lastSprintId", sprintData.id);
     }
@@ -99,6 +87,38 @@ function SprintView() {
       localStorage.setItem("beacon:lastProjectId", sprintData.projectId);
     }
   }, [sprintId]);
+
+  const refreshInsights = useCallback(async () => {
+    setSyncingInsights(true);
+    try {
+      const [analyticsData, optimizationData] = await Promise.all([
+        analyticsApi.getSprintAnalytics(sprintId),
+        optimizationApi.optimizeSprint(sprintId),
+      ]);
+      setAnalytics(analyticsData);
+      setOptimization(
+        optimizationData ?? {
+          recommendedTasks: [],
+          predictedSuccessProbability: 0,
+          totalStoryPoints: 0,
+          capacityUtilization: 0,
+          feasibilityScore: 0,
+        },
+      );
+    } finally {
+      setSyncingInsights(false);
+    }
+  }, [sprintId]);
+
+  const handleDrop = async (event, newStatus) => {
+    event.preventDefault();
+    if (!draggedTask || draggedTask.status === newStatus) {
+      return;
+    }
+    const taskId = draggedTask.id;
+    setDraggedTask(null);
+    await handleMoveTaskToStatus(taskId, newStatus);
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -128,6 +148,11 @@ function SprintView() {
       };
     }, {});
   }, [tasks]);
+
+  const remainingTaskIds = useMemo(
+    () => tasks.filter((task) => task.status !== "DONE").map((task) => task.id),
+    [tasks],
+  );
 
   const handleTaskFormChange = (event) => {
     const { name, value } = event.target;
@@ -169,6 +194,73 @@ function SprintView() {
     }
   };
 
+  const handleMoveTaskToStatus = async (taskId, nextStatus) => {
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task || task.status === nextStatus) {
+      return;
+    }
+
+    if (sprint?.status === "COMPLETED" && nextStatus !== "DONE") {
+      showAlert("Completed sprint only allows moving tasks into Done.", "error");
+      return;
+    }
+
+    const previousTasks = [...tasks];
+    setTasks((prevTasks) => prevTasks.map((item) => (item.id === taskId ? { ...item, status: nextStatus } : item)));
+
+    try {
+      await taskApi.updateTaskStatus(taskId, nextStatus);
+      await refreshInsights();
+    } catch {
+      setTasks(previousTasks);
+      showAlert("Failed to move task to the selected section.", "error");
+    }
+  };
+
+  const handleMoveOpenTasksToDone = async () => {
+    if (remainingTaskIds.length === 0) {
+      return;
+    }
+
+    setBulkCompleting(true);
+    const previousTasks = [...tasks];
+    setTasks((prevTasks) => prevTasks.map((task) => (task.status === "DONE" ? task : { ...task, status: "DONE" })));
+
+    try {
+      await Promise.all(remainingTaskIds.map((taskId) => taskApi.updateTaskStatus(taskId, "DONE")));
+      await refreshInsights();
+      showAlert("All open sprint tasks moved to Done.", "success");
+    } catch {
+      setTasks(previousTasks);
+      showAlert("Failed to complete all open sprint tasks.", "error");
+    } finally {
+      setBulkCompleting(false);
+    }
+  };
+
+  const handleSprintStatusUpdate = async (nextStatus) => {
+    if (!sprint?.id) {
+      return;
+    }
+
+    setStatusUpdating(true);
+    try {
+      await sprintApi.updateSprintStatus(sprint.id, nextStatus);
+      await loadSprint();
+      showAlert(
+        nextStatus === "COMPLETED"
+          ? "Sprint marked as completed."
+          : nextStatus === "ACTIVE"
+            ? "Sprint is active again."
+            : "Sprint status updated.",
+      );
+    } catch {
+      showAlert("Failed to update sprint status.", "error");
+    } finally {
+      setStatusUpdating(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="page">
@@ -179,7 +271,7 @@ function SprintView() {
     );
   }
 
-  if (!sprint || !analytics) {
+  if (!sprint || !analytics || !optimization) {
     return (
       <div className="page">
         <Card title="Sprint unavailable" interactive={false}>
@@ -195,7 +287,7 @@ function SprintView() {
         <div className={`project-alert project-alert-${alert.type}`} role="status">
           <span>{alert.message}</span>
           <button type="button" onClick={hideAlert} aria-label="Dismiss notification">
-            ×
+            x
           </button>
         </div>
       ) : null}
@@ -206,6 +298,50 @@ function SprintView() {
           <p className="page-subtitle">{sprint.goal}</p>
         </div>
         <div className="page-actions">
+          {sprint.status === "PLANNED" ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={statusUpdating}
+              onClick={() => handleSprintStatusUpdate("ACTIVE")}
+            >
+              Start Sprint
+            </Button>
+          ) : null}
+          {sprint.status === "ACTIVE" ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={statusUpdating}
+              onClick={() => handleSprintStatusUpdate("COMPLETED")}
+            >
+              Mark Sprint Completed
+            </Button>
+          ) : null}
+          {sprint.status === "COMPLETED" ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              loading={statusUpdating}
+              onClick={() => handleSprintStatusUpdate("ACTIVE")}
+            >
+              Reopen Sprint
+            </Button>
+          ) : null}
+          {sprint.status === "COMPLETED" && remainingTaskIds.length > 0 ? (
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              loading={bulkCompleting}
+              onClick={handleMoveOpenTasksToDone}
+            >
+              Move Open Tasks To Done ({remainingTaskIds.length})
+            </Button>
+          ) : null}
           <Button type="button" variant="primary" size="sm" onClick={() => setShowTaskForm((value) => !value)}>
             {showTaskForm ? "Close Task Form" : "Add Sprint Task"}
           </Button>
@@ -312,6 +448,7 @@ function SprintView() {
 
       <section className="panel-grid">
         <Card title="Sprint Metrics" subtitle={`${formatDate(sprint.startDate)} - ${formatDate(sprint.endDate)}`}>
+          {syncingInsights ? <p className="text-muted">Syncing metrics with the latest board updates...</p> : null}
           <div className="progress-list">
             <div className="progress-item">
               <p>Completion Rate</p>
@@ -337,13 +474,14 @@ function SprintView() {
         </Card>
 
         <Card title="Optimization Outcome" subtitle="Current sprint recommendation footprint">
+          {syncingInsights ? <p className="text-muted">Refreshing optimization after board changes...</p> : null}
           <div className="chip-row">
-            <span className="chip">{optimization.recommendedTasks.length} recommended tasks</span>
-            <span className="chip">{Math.round(optimization.predictedSuccessProbability)}% success probability</span>
-            <span className="chip">{optimization.totalStoryPoints} total points</span>
+            <span className="chip">{optimization?.recommendedTasks?.length ?? 0} recommended tasks</span>
+            <span className="chip">{Math.round(optimization?.predictedSuccessProbability ?? 0)}% success probability</span>
+            <span className="chip">{optimization?.totalStoryPoints ?? 0} total points</span>
           </div>
           <div className="task-stack">
-            {optimization.recommendedTasks.map((task) => (
+            {(optimization?.recommendedTasks ?? []).map((task) => (
               <div key={task.id} className="task-stack-item">
                 <div>
                   <p>{task.title}</p>
@@ -356,13 +494,25 @@ function SprintView() {
         </Card>
       </section>
 
-      <Card title="Sprint Board" subtitle="Task flow across delivery states">
+      <Card
+        title="Sprint Board"
+        subtitle={
+          syncingInsights ? "Task flow across delivery states | syncing metrics and optimization..." : "Task flow across delivery states"
+        }
+      >
         <div className="kanban">
           {columnOrder.map((status) => (
             <section
               key={status}
-              className={`kanban-column kanban-column-${status.toLowerCase()}`}
-              onDragOver={handleDragOver}
+              className={`kanban-column kanban-column-${status.toLowerCase()} ${
+                sprint.status === "COMPLETED" && status !== "DONE" ? "kanban-column-drop-locked" : ""
+              }`}
+              onDragOver={(event) => {
+                if (sprint.status === "COMPLETED" && status !== "DONE") {
+                  return;
+                }
+                handleDragOver(event);
+              }}
               onDrop={(event) => handleDrop(event, status)}
             >
               <header>
@@ -374,7 +524,7 @@ function SprintView() {
                   <article
                     key={task.id}
                     className={`kanban-card kanban-card-${status.toLowerCase()}`}
-                    draggable
+                    draggable={sprint.status !== "COMPLETED" || task.status !== "DONE"}
                     onDragStart={(event) => handleDragStart(event, task)}
                   >
                     <p>{task.title}</p>
@@ -382,6 +532,25 @@ function SprintView() {
                     <div className="kanban-tags">
                       <span className={`badge ${PRIORITY_META[task.priority]?.className}`}>{task.priority}</span>
                       <span className="badge status-muted">Risk {(task.risk?.score ?? 0).toFixed(2)}</span>
+                    </div>
+                    <div className="kanban-inline-move">
+                      <span>Move to</span>
+                      <select
+                        className="kanban-inline-select"
+                        value={task.status}
+                        onChange={(event) => handleMoveTaskToStatus(task.id, event.target.value)}
+                        disabled={bulkCompleting || syncingInsights || (sprint.status === "COMPLETED" && task.status === "DONE")}
+                      >
+                        {columnOrder.map((optionStatus) => (
+                          <option
+                            key={optionStatus}
+                            value={optionStatus}
+                            disabled={sprint.status === "COMPLETED" && optionStatus !== "DONE"}
+                          >
+                            {statusToLabel(optionStatus)}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </article>
                 ))}

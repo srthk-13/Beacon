@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { optimizationApi, PRIORITY_META, projectApi, taskApi } from "../api/axios.js";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { optimizationApi, PRIORITY_META, STATUS_META, projectApi, taskApi } from "../api/axios.js";
 import Button from "../components/common/Button.jsx";
 import Card from "../components/common/Card.jsx";
+import { statusToLabel } from "../utils/formatters.js";
+
+const ALL_ONGOING_SCOPE = "ONGOING";
 
 const sortByOptions = [
   { value: "priority", label: "Priority" },
@@ -10,53 +13,136 @@ const sortByOptions = [
   { value: "risk", label: "Risk score" },
 ];
 
+const backlogStatusOptions = [
+  { value: "TODO", label: "To Do" },
+  { value: "BLOCKED", label: "Blocked" },
+];
+
+const priorityOptions = ["HIGH", "MEDIUM", "LOW"];
+
+const defaultTaskForm = {
+  projectId: "",
+  title: "",
+  description: "",
+  priority: "MEDIUM",
+  storyPoints: 3,
+  risk: 0.2,
+  status: "TODO",
+};
+
 function Backlog() {
-  const { projectId } = useParams();
+  const navigate = useNavigate();
+  const { projectId: routeProjectId } = useParams();
+
+  const [selectedScope, setSelectedScope] = useState(routeProjectId ?? ALL_ONGOING_SCOPE);
+  const [projects, setProjects] = useState([]);
   const [project, setProject] = useState(null);
   const [tasks, setTasks] = useState([]);
+  const [sprintsByProject, setSprintsByProject] = useState({});
   const [optimization, setOptimization] = useState(null);
   const [sortBy, setSortBy] = useState("priority");
+  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState(null);
-  const [taskForm, setTaskForm] = useState({
-    title: "",
-    description: "",
-    priority: "MEDIUM",
-    storyPoints: 3,
-    risk: 0.2,
-  });
+  const [taskForm, setTaskForm] = useState(defaultTaskForm);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const loadBacklog = useCallback(async () => {
-    const [projectData, taskData] = await Promise.all([
-      projectApi.getProjectById(projectId),
-      taskApi.getBacklogByProject(projectId),
-    ]);
+  useEffect(() => {
+    setSelectedScope(routeProjectId ?? ALL_ONGOING_SCOPE);
+  }, [routeProjectId]);
 
-    if (!projectData) {
+  const ongoingProjects = useMemo(
+    () => projects.filter((item) => item.status === "ACTIVE" || item.status === "PLANNED"),
+    [projects],
+  );
+
+  const loadBacklog = useCallback(async () => {
+    const projectsData = await projectApi.getProjects();
+    setProjects(projectsData);
+
+    const ongoing = projectsData.filter((item) => item.status === "ACTIVE" || item.status === "PLANNED");
+
+    const effectiveScope =
+      selectedScope !== ALL_ONGOING_SCOPE && projectsData.some((item) => item.id === selectedScope)
+        ? selectedScope
+        : ALL_ONGOING_SCOPE;
+    if (effectiveScope !== selectedScope) {
+      setSelectedScope(effectiveScope);
+    }
+
+    const scopedProjects =
+      effectiveScope === ALL_ONGOING_SCOPE ? ongoing : projectsData.filter((item) => item.id === effectiveScope);
+
+    if (scopedProjects.length === 0) {
+      setProject(null);
+      setTasks([]);
+      setSprintsByProject({});
+      setOptimization(null);
       return;
     }
 
-    const activeSprint = projectData.sprints?.find((sprint) => sprint.status === "ACTIVE");
-    const optimizationData = activeSprint ? await optimizationApi.optimizeSprint(activeSprint.id) : null;
+    const [scopedDetails, scopedBacklogs] = await Promise.all([
+      Promise.all(scopedProjects.map((item) => projectApi.getProjectById(item.id))),
+      Promise.all(scopedProjects.map((item) => taskApi.getBacklogByProject(item.id))),
+    ]);
 
-    setProject(projectData);
-    setTasks(taskData);
-    setOptimization(optimizationData);
-    localStorage.setItem("beacon:lastProjectId", projectData.id);
+    const sprintMap = {};
+    const projectNameById = new Map();
+
+    scopedProjects.forEach((item) => {
+      projectNameById.set(item.id, item.name);
+    });
+
+    scopedDetails.forEach((item) => {
+      if (item?.id) {
+        sprintMap[item.id] = item.sprints ?? [];
+      }
+    });
+
+    setSprintsByProject(sprintMap);
+
+    const mergedTasks = scopedBacklogs.flat().map((task) => ({
+      ...task,
+      projectName: projectNameById.get(task.projectId) ?? "Unknown Project",
+    }));
+
+    setTasks(mergedTasks);
+
+    if (effectiveScope === ALL_ONGOING_SCOPE) {
+      setProject(null);
+      setOptimization(null);
+      return;
+    }
+
+    const selectedProject = scopedDetails.find((item) => item?.id === effectiveScope) ?? null;
+    setProject(selectedProject);
+
+    if (selectedProject?.id) {
+      localStorage.setItem("beacon:lastProjectId", selectedProject.id);
+    }
+
+    const activeSprint = selectedProject?.sprints?.find((sprint) => sprint.status === "ACTIVE");
     if (activeSprint?.id) {
       localStorage.setItem("beacon:lastSprintId", activeSprint.id);
     }
-  }, [projectId]);
+
+    const optimizationData = activeSprint ? await optimizationApi.optimizeSprint(activeSprint.id) : null;
+    setOptimization(optimizationData);
+  }, [selectedScope]);
 
   useEffect(() => {
     let isMounted = true;
 
     const initialize = async () => {
       try {
+        setError("");
         await loadBacklog();
+      } catch {
+        if (isMounted) {
+          setError("Backlog data could not be loaded.");
+        }
       } finally {
         if (isMounted) {
           setLoading(false);
@@ -71,8 +157,39 @@ function Backlog() {
     };
   }, [loadBacklog]);
 
+  const actionableSprintsByProject = useMemo(() => {
+    return Object.fromEntries(
+      Object.entries(sprintsByProject).map(([projectId, sprints]) => {
+        const options = (sprints ?? []).filter((sprint) => sprint.status === "ACTIVE" || sprint.status === "PLANNED");
+        return [projectId, options];
+      }),
+    );
+  }, [sprintsByProject]);
+
+  const activeSprintByProject = useMemo(() => {
+    return Object.fromEntries(
+      Object.entries(actionableSprintsByProject).map(([projectId, sprints]) => {
+        const activeSprint = (sprints ?? []).find((sprint) => sprint.status === "ACTIVE") ?? null;
+        return [projectId, activeSprint];
+      }),
+    );
+  }, [actionableSprintsByProject]);
+
   const sortedTasks = useMemo(() => {
-    const next = [...tasks];
+    const filtered = tasks.filter((task) => {
+      if (!query.trim()) {
+        return true;
+      }
+
+      const normalized = query.trim().toLowerCase();
+      return (
+        task.title?.toLowerCase().includes(normalized) ||
+        task.description?.toLowerCase().includes(normalized) ||
+        task.projectName?.toLowerCase().includes(normalized)
+      );
+    });
+
+    const next = [...filtered];
 
     if (sortBy === "priority") {
       next.sort((left, right) => {
@@ -89,18 +206,36 @@ function Backlog() {
 
     next.sort((left, right) => (right.risk?.score ?? 0) - (left.risk?.score ?? 0));
     return next;
-  }, [sortBy, tasks]);
+  }, [query, sortBy, tasks]);
+
+  const backlogSummary = useMemo(() => {
+    return {
+      totalStories: sortedTasks.length,
+      highPriority: sortedTasks.filter((task) => task.priority === "HIGH").length,
+      blockedStories: sortedTasks.filter((task) => task.status === "BLOCKED").length,
+      totalPoints: sortedTasks.reduce((sum, task) => sum + Number(task.storyPoints ?? 0), 0),
+    };
+  }, [sortedTasks]);
+
+  const backlogCountsByProject = useMemo(() => {
+    return sortedTasks.reduce((accumulator, task) => {
+      const key = task.projectId;
+      const previous = accumulator[key] ?? { projectName: task.projectName, count: 0, points: 0 };
+      accumulator[key] = {
+        projectName: previous.projectName,
+        count: previous.count + 1,
+        points: previous.points + Number(task.storyPoints ?? 0),
+      };
+      return accumulator;
+    }, {});
+  }, [sortedTasks]);
 
   const openCreateTaskForm = () => {
+    const defaultProjectId =
+      selectedScope !== ALL_ONGOING_SCOPE ? selectedScope : ongoingProjects[0]?.id ?? projects[0]?.id ?? "";
     setShowTaskForm(true);
     setEditingTaskId(null);
-    setTaskForm({
-      title: "",
-      description: "",
-      priority: "MEDIUM",
-      storyPoints: 3,
-      risk: 0.2,
-    });
+    setTaskForm({ ...defaultTaskForm, projectId: defaultProjectId });
     setError("");
   };
 
@@ -108,11 +243,13 @@ function Backlog() {
     setShowTaskForm(true);
     setEditingTaskId(task.id);
     setTaskForm({
+      projectId: task.projectId,
       title: task.title,
       description: task.description ?? "",
       priority: task.priority ?? "MEDIUM",
       storyPoints: task.storyPoints ?? 0,
       risk: task.risk?.score ?? 0.2,
+      status: task.status ?? "TODO",
     });
     setError("");
   };
@@ -125,15 +262,35 @@ function Backlog() {
     }));
   };
 
+  const handleScopeChange = (event) => {
+    const nextScope = event.target.value;
+    setSelectedScope(nextScope);
+    if (nextScope === ALL_ONGOING_SCOPE) {
+      navigate("/backlog");
+      return;
+    }
+    navigate(`/projects/${nextScope}/backlog`);
+  };
+
   const handleSubmitTask = async (event) => {
     event.preventDefault();
     setSaving(true);
     setError("");
 
     try {
+      if (!taskForm.projectId) {
+        setError("Select a project for this backlog story.");
+        setSaving(false);
+        return;
+      }
+
       const payload = {
-        ...taskForm,
-        projectId,
+        projectId: taskForm.projectId,
+        title: taskForm.title,
+        description: taskForm.description,
+        priority: taskForm.priority,
+        storyPoints: taskForm.storyPoints,
+        status: taskForm.status,
         risk: {
           score: taskForm.risk,
           level: taskForm.risk >= 0.6 ? "HIGH" : taskForm.risk >= 0.3 ? "MEDIUM" : "LOW",
@@ -145,6 +302,7 @@ function Backlog() {
       } else {
         await taskApi.createTask(payload);
       }
+
       await loadBacklog();
       setShowTaskForm(false);
       setEditingTaskId(null);
@@ -155,9 +313,54 @@ function Backlog() {
     }
   };
 
-  const handleSendToSprint = async (taskId, sprintId) => {
-    await taskApi.updateTask(taskId, { sprintId, status: "TODO" });
-    await loadBacklog();
+  const handlePlanStoryToSprint = async (task, sprintId) => {
+    try {
+      setError("");
+      await taskApi.updateTask(task.id, { sprintId, status: "TODO" });
+      localStorage.setItem("beacon:lastProjectId", task.projectId);
+      localStorage.setItem("beacon:lastSprintId", sprintId);
+      await loadBacklog();
+    } catch {
+      setError("Could not plan this story into sprint.");
+    }
+  };
+
+  const handlePriorityChange = async (taskId, priority) => {
+    try {
+      setError("");
+      await taskApi.updateTask(taskId, { priority });
+      await loadBacklog();
+    } catch {
+      setError("Could not update story priority.");
+    }
+  };
+
+  const handleBacklogStatusChange = async (taskId, status) => {
+    try {
+      setError("");
+      await taskApi.updateTaskStatus(taskId, status);
+      await loadBacklog();
+    } catch {
+      setError("Could not update story status.");
+    }
+  };
+
+  const handleCloneTask = async (task) => {
+    try {
+      setError("");
+      await taskApi.createTask({
+        projectId: task.projectId,
+        title: `${task.title} (Copy)`,
+        description: task.description ?? "",
+        priority: task.priority ?? "MEDIUM",
+        storyPoints: Number(task.storyPoints ?? 0),
+        status: task.status ?? "TODO",
+        risk: task.risk ?? { score: 0.2, level: "LOW" },
+      });
+      await loadBacklog();
+    } catch {
+      setError("Could not clone this story.");
+    }
   };
 
   const handleDeleteTask = async (taskId) => {
@@ -165,21 +368,27 @@ function Backlog() {
     if (!shouldDelete) {
       return;
     }
-    await taskApi.deleteTask(taskId);
-    await loadBacklog();
+
+    try {
+      setError("");
+      await taskApi.deleteTask(taskId);
+      await loadBacklog();
+    } catch {
+      setError("Could not delete this story.");
+    }
   };
 
   if (loading) {
     return (
       <div className="page">
         <Card title="Loading backlog" interactive={false}>
-          <p className="text-muted">Preparing optimization candidates...</p>
+          <p className="text-muted">Preparing cross-project backlog insights...</p>
         </Card>
       </div>
     );
   }
 
-  if (!project) {
+  if (selectedScope !== ALL_ONGOING_SCOPE && !project) {
     return (
       <div className="page">
         <Card title="Backlog unavailable" interactive={false}>
@@ -194,22 +403,75 @@ function Backlog() {
       <div className="page-header">
         <div>
           <p className="eyebrow">Backlog Prioritization</p>
-          <h1 className="page-title">{project.name}</h1>
-          <p className="page-subtitle">Score and sequence stories for smarter sprint commitments.</p>
+          <h1 className="page-title">{selectedScope === ALL_ONGOING_SCOPE ? "Ongoing Projects Backlog" : project?.name}</h1>
+          <p className="page-subtitle">
+            {selectedScope === ALL_ONGOING_SCOPE
+              ? "Review and prioritize stories across all active/planned projects."
+              : "Score and sequence stories for smarter sprint commitments."}
+          </p>
         </div>
         <div className="page-actions">
+          <select className="filter-select" value={selectedScope} onChange={handleScopeChange}>
+            <option value={ALL_ONGOING_SCOPE}>All Ongoing Projects</option>
+            {projects.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name} ({statusToLabel(item.status)})
+              </option>
+            ))}
+          </select>
           <Button type="button" variant="primary" size="sm" onClick={openCreateTaskForm}>
-            Add Backlog Task
+            Add Backlog Story
           </Button>
-          <Button as={Link} to={`/projects/${project.id}`} variant="ghost" size="sm">
-            Project Details
-          </Button>
+          {project?.id ? (
+            <Button as={Link} to={`/projects/${project.id}`} variant="ghost" size="sm">
+              Project Details
+            </Button>
+          ) : null}
         </div>
       </div>
 
+      <section className="kpi-grid">
+        <Card className="kpi-card" interactive={false}>
+          <p className="kpi-label">Backlog Stories</p>
+          <p className="kpi-value">{backlogSummary.totalStories}</p>
+        </Card>
+        <Card className="kpi-card" interactive={false}>
+          <p className="kpi-label">High Priority</p>
+          <p className="kpi-value">{backlogSummary.highPriority}</p>
+        </Card>
+        <Card className="kpi-card" interactive={false}>
+          <p className="kpi-label">Blocked Stories</p>
+          <p className="kpi-value">{backlogSummary.blockedStories}</p>
+        </Card>
+        <Card className="kpi-card" interactive={false}>
+          <p className="kpi-label">Total Story Points</p>
+          <p className="kpi-value">{backlogSummary.totalPoints}</p>
+        </Card>
+      </section>
+
       {showTaskForm ? (
-        <Card title={editingTaskId ? "Edit Backlog Task" : "Create Backlog Task"} interactive={false}>
+        <Card title={editingTaskId ? "Edit Backlog Story" : "Create Backlog Story"} interactive={false}>
           <form className="entity-form" onSubmit={handleSubmitTask}>
+            <label htmlFor="backlog-project">Project</label>
+            <select
+              id="backlog-project"
+              className="filter-select"
+              name="projectId"
+              value={taskForm.projectId}
+              onChange={handleTaskFormChange}
+              disabled={Boolean(editingTaskId)}
+              required
+            >
+              <option value="" disabled>
+                Select project
+              </option>
+              {projects.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+
             <label htmlFor="backlog-title">Title</label>
             <input
               id="backlog-title"
@@ -270,11 +532,27 @@ function Backlog() {
                   onChange={handleTaskFormChange}
                 />
               </div>
+              <div>
+                <label htmlFor="backlog-status">Backlog Status</label>
+                <select
+                  id="backlog-status"
+                  className="filter-select"
+                  name="status"
+                  value={taskForm.status}
+                  onChange={handleTaskFormChange}
+                >
+                  {backlogStatusOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <div className="project-actions">
               <Button type="submit" variant="primary" size="sm" loading={saving}>
-                {editingTaskId ? "Save Task" : "Create Task"}
+                {editingTaskId ? "Save Story" : "Create Story"}
               </Button>
               <Button
                 type="button"
@@ -292,80 +570,162 @@ function Backlog() {
         </Card>
       ) : null}
 
-      {optimization ? (
-        <Card title="AI Optimization Summary" subtitle="Recommended tasks for next sprint boundary">
-          <div className="chip-row">
-            <span className="chip">Predicted success {Math.round(optimization.predictedSuccessProbability)}%</span>
-            <span className="chip">Capacity utilization {Math.round(optimization.capacityUtilization * 100)}%</span>
-            <span className="chip">Total points {optimization.totalStoryPoints}</span>
-          </div>
-          <div className="task-stack">
-            {optimization.recommendedTasks.map((task) => (
-              <div key={task.id} className="task-stack-item">
-                <div>
-                  <p>{task.title}</p>
-                  <span>{task.storyPoints} points</span>
+      {selectedScope !== ALL_ONGOING_SCOPE ? (
+        optimization ? (
+          <Card title="AI Optimization Summary" subtitle="Recommended stories for the active sprint boundary">
+            <div className="chip-row">
+              <span className="chip">Predicted success {Math.round(optimization.predictedSuccessProbability)}%</span>
+              <span className="chip">Capacity utilization {Math.round(optimization.capacityUtilization * 100)}%</span>
+              <span className="chip">Total points {optimization.totalStoryPoints}</span>
+            </div>
+            <div className="task-stack">
+              {optimization.recommendedTasks.map((task) => (
+                <div key={task.id} className="task-stack-item">
+                  <div>
+                    <p>{task.title}</p>
+                    <span>{task.storyPoints} points</span>
+                  </div>
+                  <span className={`badge ${PRIORITY_META[task.priority]?.className}`}>{task.priority}</span>
                 </div>
-                <span className={`badge ${PRIORITY_META[task.priority]?.className}`}>{task.priority}</span>
+              ))}
+            </div>
+          </Card>
+        ) : (
+          <Card title="AI Optimization Summary" subtitle="No active sprint found for this project" interactive={false}>
+            <p className="text-muted">Start a sprint to receive optimization recommendations for this project.</p>
+          </Card>
+        )
+      ) : (
+        <Card title="Cross-Project Backlog Focus" subtitle="Backlog distribution across ongoing projects" interactive={false}>
+          <div className="throughput-list">
+            {Object.entries(backlogCountsByProject).map(([projectId, item]) => (
+              <div key={projectId} className="throughput-row">
+                <div className="throughput-head">
+                  <p>{item.projectName}</p>
+                  <span>
+                    {item.count} stories | {item.points} pts
+                  </span>
+                </div>
               </div>
             ))}
           </div>
         </Card>
-      ) : null}
+      )}
 
       <Card
         title="Backlog Stories"
-        subtitle={`${sortedTasks.length} pending tasks`}
+        subtitle={`${sortedTasks.length} pending stories`}
         actions={
-          <select className="filter-select" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
-            {sortByOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                Sort by {option.label}
-              </option>
-            ))}
-          </select>
+          <div className="filter-bar backlog-filters">
+            <input
+              className="filter-input"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search title, description, or project"
+            />
+            <select className="filter-select" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+              {sortByOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  Sort by {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
         }
       >
+        <p className="backlog-note">
+          Planning into sprint means the story leaves backlog and appears in the selected sprint board as <strong>To Do</strong>.
+        </p>
+
         <div className="backlog-list">
-          {sortedTasks.map((task) => (
-            <article key={task.id} className="backlog-row">
-              <div>
-                <h4>{task.title}</h4>
-                <p>{task.description}</p>
-              </div>
-              <div className="backlog-row-meta">
-                <span>{task.storyPoints} pts</span>
-                <span>Risk {(task.risk?.score ?? 0).toFixed(2)}</span>
-                <span className={`badge ${PRIORITY_META[task.priority]?.className}`}>{task.priority}</span>
-                <Button type="button" variant="ghost" size="sm" onClick={() => openEditTaskForm(task)}>
-                  Edit
-                </Button>
-                {project.sprints?.length ? (
+          {sortedTasks.map((task) => {
+            const sprintOptions = actionableSprintsByProject[task.projectId] ?? [];
+            const activeSprint = activeSprintByProject[task.projectId] ?? null;
+
+            return (
+              <article key={task.id} className="backlog-row">
+                <div>
+                  <h4>{task.title}</h4>
+                  <p>{task.description}</p>
+                  {selectedScope === ALL_ONGOING_SCOPE ? (
+                    <span className="backlog-project-tag">{task.projectName}</span>
+                  ) : null}
+                </div>
+
+                <div className="backlog-row-meta">
+                  <span>{task.storyPoints} pts</span>
+                  <span>Risk {(task.risk?.score ?? 0).toFixed(2)}</span>
+                  <span className={`badge ${PRIORITY_META[task.priority]?.className}`}>{task.priority}</span>
+                  <span className={`badge ${STATUS_META[task.status]?.className ?? "status-muted"}`}>{statusToLabel(task.status)}</span>
+
+                  <Button type="button" variant="ghost" size="sm" onClick={() => openEditTaskForm(task)}>
+                    Edit
+                  </Button>
+
+                  <Button type="button" variant="ghost" size="sm" onClick={() => handleCloneTask(task)}>
+                    Clone
+                  </Button>
+
+                  {activeSprint ? (
+                    <Button type="button" variant="secondary" size="sm" onClick={() => handlePlanStoryToSprint(task, activeSprint.id)}>
+                      Plan To Active Sprint
+                    </Button>
+                  ) : null}
+
+                  {sprintOptions.length > 0 ? (
+                    <select
+                      className="filter-select"
+                      defaultValue=""
+                      onChange={(event) => {
+                        if (event.target.value) {
+                          handlePlanStoryToSprint(task, event.target.value);
+                        }
+                      }}
+                    >
+                      <option value="" disabled>
+                        Plan Into Sprint
+                      </option>
+                      {sprintOptions.map((sprint) => (
+                        <option key={sprint.id} value={sprint.id}>
+                          {sprint.name} ({statusToLabel(sprint.status)})
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="text-muted">No active/planned sprint</span>
+                  )}
+
                   <select
                     className="filter-select"
-                    defaultValue=""
-                    onChange={(event) => {
-                      if (event.target.value) {
-                        handleSendToSprint(task.id, event.target.value);
-                      }
-                    }}
+                    value={task.priority}
+                    onChange={(event) => handlePriorityChange(task.id, event.target.value)}
                   >
-                    <option value="" disabled>
-                      Move to sprint
-                    </option>
-                    {project.sprints.map((sprint) => (
-                      <option key={sprint.id} value={sprint.id}>
-                        {sprint.name}
+                    {priorityOptions.map((priority) => (
+                      <option key={priority} value={priority}>
+                        Priority: {priority}
                       </option>
                     ))}
                   </select>
-                ) : null}
-                <Button type="button" variant="danger" size="sm" onClick={() => handleDeleteTask(task.id)}>
-                  Delete
-                </Button>
-              </div>
-            </article>
-          ))}
+
+                  <select
+                    className="filter-select"
+                    value={task.status}
+                    onChange={(event) => handleBacklogStatusChange(task.id, event.target.value)}
+                  >
+                    {backlogStatusOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        Status: {option.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <Button type="button" variant="danger" size="sm" onClick={() => handleDeleteTask(task.id)}>
+                    Delete
+                  </Button>
+                </div>
+              </article>
+            );
+          })}
         </div>
       </Card>
 
