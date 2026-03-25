@@ -14,7 +14,14 @@ export const registerUser = async (data) => {
     passwordHash: hash,
     role: role || "DEVELOPER",
   })
-  return user;
+  const token = jwt.sign({
+    id: user._id,
+    role: user.role,
+  },
+    process.env.JWT_SECRET,
+    { expiresIn: "1d" }
+  );
+  return { user, token };
 }
 export const loginUser = async ({ email, password }) => {
   const user = await User.findOne({ email });
@@ -29,4 +36,10 @@ export const loginUser = async ({ email, password }) => {
     { expiresIn: "1d" }
   );
   return { user, token }
+}
+
+export const getMeProfile = async (id) => {
+  const user = await User.findById(id).select("-passwordHash");
+  if (!user) throw new Error("User Not Found");
+  return user;
 }
