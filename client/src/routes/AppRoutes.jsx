@@ -20,6 +20,7 @@ function AppRoutes() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/projects" element={<Projects />} />
+          <Route path="/backlog" element={<Backlog />} />
           <Route path="/invitations" element={<Invitations />} />
           <Route path="/projects/:projectId" element={<ProjectDetails />} />
           <Route path="/projects/:projectId/backlog" element={<Backlog />} />
