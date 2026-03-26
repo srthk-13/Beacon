@@ -1,11 +1,19 @@
 import axios from "axios";
 
-const DEFAULT_API_BASE_URL = "http://localhost:5000/api";
+const DEFAULT_API_BASE_URL = "http://localhost:5001/api";
 const REQUEST_TIMEOUT_MS = 6000;
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL,
   timeout: REQUEST_TIMEOUT_MS,
+});
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("beacon:auth_token");
+  if (token && !token.startsWith("demo-token:")) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
 });
 
 const delay = (ms = 220) => new Promise((resolve) => setTimeout(resolve, ms));
