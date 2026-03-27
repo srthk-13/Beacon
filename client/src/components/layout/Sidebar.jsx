@@ -58,9 +58,11 @@ function Sidebar() {
         ))}
       </nav>
 
-      <div className="sidebar-footer">
-        <p>Optimization Engine</p>
-        <strong>Realtime Insight Mode</strong>
+      <div className="sidebar-bottom-slot">
+        <div className="sidebar-footer">
+          <p>Optimization Engine</p>
+          <strong>Realtime Insight Mode</strong>
+        </div>
       </div>
     </aside>
   );
