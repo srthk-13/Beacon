@@ -9,6 +9,7 @@ import ProjectDetails from "../pages/ProjectDetails.jsx";
 import Projects from "../pages/Projects.jsx";
 import Signup from "../pages/Signup.jsx";
 import SprintView from "../pages/SprintView.jsx";
+import Analytics from "../pages/Analytics.jsx";
 
 function AppRoutes() {
   return (
@@ -20,6 +21,7 @@ function AppRoutes() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/projects" element={<Projects />} />
+          <Route path="/analytics" element={<Analytics />} />
           <Route path="/backlog" element={<Backlog />} />
           <Route path="/invitations" element={<Invitations />} />
           <Route path="/projects/:projectId" element={<ProjectDetails />} />

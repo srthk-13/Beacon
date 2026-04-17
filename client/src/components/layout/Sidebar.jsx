@@ -12,6 +12,7 @@ function Sidebar() {
     { to: "/", label: "Dashboard", icon: "D" },
     { to: "/projects", label: "Projects", icon: "P" },
     { to: "/backlog", label: "Backlog", icon: "B" },
+    { to: "/analytics", label: "Analytics", icon: "A" },
     { to: `/sprints/${quickLinks.sprintId}`, label: "Sprint View", icon: "S" },
   ];
 
