@@ -18,6 +18,6 @@ export const updateProjectController = async (req, res) =>
 export const deleteProjectController = async (req, res) =>
   sendSuccess(res, await deleteProject(req.params.id), "Project deleted successfully.");
 export const inviteMemberController = async (req, res) =>
-  sendSuccess(res, await inviteMemberByUniqueCode(req.params.id, req.body), "Invitation sent.", 201);
+  sendSuccess(res, await inviteMemberByUniqueCode(req.params.id, req.user.id, req.body), "Invitation sent.", 201);
 export const getProjectInvitationsController = async (req, res) =>
   sendSuccess(res, await getProjectInvitations(req.params.id));

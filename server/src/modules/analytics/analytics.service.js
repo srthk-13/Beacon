@@ -4,6 +4,11 @@ import Task from "../task/task.model.js";
 import User from "../user/user.model.js";
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const getPriorityScore = (task) =>
+  Number(task.businessValue ?? 0) * 0.4 +
+  Number(task.riskFactor ?? 0) * 0.2 +
+  Number(task.urgency ?? 0) * 0.2 -
+  Number(task.storyPoints ?? 0) * 0.2;
 
 export const serializeId = (value) => String(value);
 
@@ -147,11 +152,62 @@ export const buildProjectSnapshot = async (project) => {
   };
 };
 
+const buildOptimizationSnapshot = async (sprintId) => {
+  const sprint = await Sprint.findById(sprintId).lean();
+  if (!sprint) {
+    return {
+      recommendedTasks: [],
+      totalStoryPoints: 0,
+      capacityUtilization: 0,
+      predictedSuccessProbability: 0,
+      feasibilityScore: 0,
+    };
+  }
+
+  const capacity = await getProjectCapacity(sprint.projectId);
+  const candidates = await Task.find({
+    projectId: sprint.projectId,
+    $or: [{ sprintId: null }, { sprintId: sprint._id }],
+  }).lean();
+
+  const recommendedTasks = [];
+  let totalStoryPoints = 0;
+
+  for (const task of candidates.sort((left, right) => getPriorityScore(right) - getPriorityScore(left))) {
+    const storyPointsValue = Number(task.storyPoints ?? 0);
+    if (totalStoryPoints + storyPointsValue <= capacity) {
+      recommendedTasks.push({
+        ...task,
+        id: serializeId(task._id),
+        projectId: serializeId(task.projectId),
+        sprintId: task.sprintId ? serializeId(task.sprintId) : null,
+        assignedTo: task.assignedTo ? serializeId(task.assignedTo) : null,
+      });
+      totalStoryPoints += storyPointsValue;
+    }
+  }
+
+  const capacityUtilization = capacity > 0 ? totalStoryPoints / capacity : 0;
+  const blockedRatio =
+    recommendedTasks.length > 0
+      ? recommendedTasks.filter((task) => task.status === "BLOCKED").length / recommendedTasks.length
+      : 0;
+
+  return {
+    recommendedTasks: recommendedTasks.slice(0, 5),
+    totalStoryPoints,
+    capacityUtilization: clamp(capacityUtilization, 0, 1),
+    predictedSuccessProbability: clamp((1 - blockedRatio) * 100 - (capacityUtilization > 1 ? 12 : 0), 0, 99),
+    feasibilityScore: totalStoryPoints > 0 ? capacity / totalStoryPoints : 0,
+  };
+};
+
 export const buildDashboardOverview = async () => {
   const [projects, sprints] = await Promise.all([Project.find({}).lean(), Sprint.find({}).lean()]);
   const snapshots = await Promise.all(projects.map((project) => buildProjectSnapshot(project)));
   const activeSprint = sprints.find((sprint) => sprint.status === "ACTIVE") ?? sprints[0] ?? null;
   const activeSprintAnalytics = activeSprint ? await buildSprintAnalytics(activeSprint._id) : null;
+  const optimization = activeSprint ? await buildOptimizationSnapshot(activeSprint._id) : null;
 
   let teamLoad = [];
   if (activeSprint) {
@@ -183,6 +239,7 @@ export const buildDashboardOverview = async () => {
           ...activeSprintAnalytics,
         }
       : null,
+    optimization,
     teamLoad,
     projects: snapshots,
   };

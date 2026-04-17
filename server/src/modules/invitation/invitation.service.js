@@ -1,5 +1,6 @@
 import Invitation from "./invitation.model.js";
 import Project from "../project/project.model.js";
+import User from "../user/user.model.js";
 import { HttpError } from "../../utils/httpError.js";
 import { serializeId } from "../analytics/analytics.service.js";
 
@@ -21,6 +22,10 @@ export const getUserInvitations = async (userId) => {
 };
 
 export const respondToInvitation = async (invitationId, userId, action) => {
+  if (!["accept", "decline"].includes(action)) {
+    throw new HttpError(400, "Invitation action must be either accept or decline.");
+  }
+
   const invitation = await Invitation.findById(invitationId);
   if (!invitation) {
     throw new HttpError(404, "Invitation not found.");
@@ -35,9 +40,14 @@ export const respondToInvitation = async (invitationId, userId, action) => {
     await invitation.save();
 
     if (invitation.status === "ACCEPTED") {
-      await Project.findByIdAndUpdate(invitation.projectId, {
-        $addToSet: { teamMemberIds: invitation.inviteeUserId },
-      });
+      await Promise.all([
+        Project.findByIdAndUpdate(invitation.projectId, {
+          $addToSet: { teamMemberIds: invitation.inviteeUserId },
+        }),
+        User.findByIdAndUpdate(invitation.inviteeUserId, {
+          $addToSet: { projects: invitation.projectId },
+        }),
+      ]);
     }
   }
 

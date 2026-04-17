@@ -8,36 +8,46 @@ function Analytics() {
   const [projectAnalytics, setProjectAnalytics] = useState([]);
   const [sprints, setSprints] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     let active = true;
 
     const loadAnalytics = async () => {
-      const dashboard = await analyticsApi.getDashboardOverview();
-      const projects = await projectApi.getProjects();
-      const analyticsByProject = await Promise.all(
-        projects.map(async (project) => ({
-          project,
-          analytics: await analyticsApi.getProjectAnalytics(project.id),
-        })),
-      );
-      const sprintRows = await Promise.all(
-        projects.flatMap((project) =>
-          (project.activeSprintId ? [project.activeSprintId] : []).map(async (sprintId) => ({
-            sprint: await sprintApi.getSprintById(sprintId),
-            analytics: await analyticsApi.getSprintAnalytics(sprintId),
+      try {
+        const dashboard = await analyticsApi.getDashboardOverview();
+        const projects = await projectApi.getProjects();
+        const analyticsByProject = await Promise.all(
+          projects.map(async (project) => ({
+            project,
+            analytics: await analyticsApi.getProjectAnalytics(project.id),
           })),
-        ),
-      );
+        );
+        const sprintRows = await Promise.all(
+          projects.flatMap((project) =>
+            (project.activeSprintId ? [project.activeSprintId] : []).map(async (sprintId) => ({
+              sprint: await sprintApi.getSprintById(sprintId),
+              analytics: await analyticsApi.getSprintAnalytics(sprintId),
+            })),
+          ),
+        );
 
-      if (!active) {
-        return;
+        if (!active) {
+          return;
+        }
+
+        setOverview(dashboard);
+        setProjectAnalytics(analyticsByProject);
+        setSprints(sprintRows.filter((row) => row.sprint && row.analytics));
+      } catch {
+        if (active) {
+          setError("Analytics could not be loaded right now.");
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
       }
-
-      setOverview(dashboard);
-      setProjectAnalytics(analyticsByProject);
-      setSprints(sprintRows.filter((row) => row.sprint && row.analytics));
-      setLoading(false);
     };
 
     loadAnalytics();
@@ -54,6 +64,16 @@ function Analytics() {
       <div className="page">
         <Card title="Loading analytics" interactive={false}>
           <p className="text-muted">Preparing velocity, health, and workload insights...</p>
+        </Card>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="page">
+        <Card title="Analytics unavailable" interactive={false}>
+          <p className="form-error">{error}</p>
         </Card>
       </div>
     );

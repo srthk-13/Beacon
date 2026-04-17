@@ -1,7 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 
 const getQuickLinks = () => ({
-  sprintId: localStorage.getItem("beacon:lastSprintId") ?? "s-001",
+  sprintId: localStorage.getItem("beacon:lastSprintId"),
 });
 
 function Sidebar() {
@@ -13,7 +13,7 @@ function Sidebar() {
     { to: "/projects", label: "Projects", icon: "P" },
     { to: "/backlog", label: "Backlog", icon: "B" },
     { to: "/analytics", label: "Analytics", icon: "A" },
-    { to: `/sprints/${quickLinks.sprintId}`, label: "Sprint View", icon: "S" },
+    { to: quickLinks.sprintId ? `/sprints/${quickLinks.sprintId}` : "/projects", label: "Sprint View", icon: "S" },
   ];
 
   const isItemActive = (item) => {

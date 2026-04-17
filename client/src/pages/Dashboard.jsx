@@ -11,6 +11,13 @@ function Dashboard() {
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const activeSprint = overview?.activeSprint ?? null;
+  const optimization = overview?.optimization ?? {
+    recommendedTasks: [],
+    predictedSuccessProbability: 0,
+    capacityUtilization: 0,
+    feasibilityScore: 0,
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -129,43 +136,43 @@ function Dashboard() {
       </section>
 
       <section className="panel-grid">
-        <Card
-          title={overview.activeSprint.name}
-          subtitle={`${overview.activeSprint.projectName} | ${overview.activeSprint.committedStoryPoints} committed pts`}
-        >
-          <div className="progress-list">
-            <div className="progress-item">
-              <p>Completion</p>
-              <strong>{formatPercent(overview.activeSprint.completionRate)}</strong>
-              <div className="progress-track">
-                <span
-                  className="progress-fill progress-fill-primary"
-                  style={{ width: formatPercent(overview.activeSprint.completionRate) }}
-                />
+        {activeSprint ? (
+          <Card
+            title={activeSprint.name}
+            subtitle={`${activeSprint.projectName} | ${activeSprint.committedStoryPoints} committed pts`}
+          >
+            <div className="progress-list">
+              <div className="progress-item">
+                <p>Completion</p>
+                <strong>{formatPercent(activeSprint.completionRate)}</strong>
+                <div className="progress-track">
+                  <span className="progress-fill progress-fill-primary" style={{ width: formatPercent(activeSprint.completionRate) }} />
+                </div>
+              </div>
+              <div className="progress-item">
+                <p>Capacity Utilization</p>
+                <strong>{formatPercent(activeSprint.capacityUtilization)}</strong>
+                <div className="progress-track">
+                  <span
+                    className="progress-fill progress-fill-warm"
+                    style={{ width: formatPercent(activeSprint.capacityUtilization) }}
+                  />
+                </div>
+              </div>
+              <div className="progress-item">
+                <p>Sprint Health</p>
+                <strong>{Math.round(activeSprint.healthScore)} / 100</strong>
+                <div className="progress-track">
+                  <span className="progress-fill progress-fill-good" style={{ width: `${Math.round(activeSprint.healthScore)}%` }} />
+                </div>
               </div>
             </div>
-            <div className="progress-item">
-              <p>Capacity Utilization</p>
-              <strong>{formatPercent(overview.activeSprint.capacityUtilization)}</strong>
-              <div className="progress-track">
-                <span
-                  className="progress-fill progress-fill-warm"
-                  style={{ width: formatPercent(overview.activeSprint.capacityUtilization) }}
-                />
-              </div>
-            </div>
-            <div className="progress-item">
-              <p>Sprint Health</p>
-              <strong>{Math.round(overview.activeSprint.healthScore)} / 100</strong>
-              <div className="progress-track">
-                <span
-                  className="progress-fill progress-fill-good"
-                  style={{ width: `${Math.round(overview.activeSprint.healthScore)}%` }}
-                />
-              </div>
-            </div>
-          </div>
-        </Card>
+          </Card>
+        ) : (
+          <Card title="No sprint telemetry" subtitle="Create or activate a sprint to populate live delivery signals.">
+            <p className="text-muted">Portfolio metrics are available, but there is no sprint snapshot to visualize yet.</p>
+          </Card>
+        )}
 
         <Card title="Team Load Balancer" subtitle="Assigned points vs per-sprint capacity">
           <div className="team-load-list">
@@ -198,9 +205,9 @@ function Dashboard() {
       <section className="panel-grid">
         <Card title="Optimization Spotlight" subtitle="Highest priority recommended stories">
           <div className="chip-row">
-            <span className="chip">Success Probability {Math.round(overview.optimization.predictedSuccessProbability)}%</span>
-            <span className="chip">Utilization {formatPercent(overview.optimization.capacityUtilization)}</span>
-            <span className="chip">Feasibility {overview.optimization.feasibilityScore.toFixed(2)}</span>
+            <span className="chip">Success Probability {Math.round(optimization.predictedSuccessProbability)}%</span>
+            <span className="chip">Utilization {formatPercent(optimization.capacityUtilization)}</span>
+            <span className="chip">Feasibility {optimization.feasibilityScore.toFixed(2)}</span>
           </div>
 
           <div className="priority-legend">
@@ -218,7 +225,7 @@ function Dashboard() {
           </div>
 
           <div className="task-stack">
-            {overview.optimization.recommendedTasks.map((task) => (
+            {optimization.recommendedTasks.map((task) => (
               <div key={task.id} className="task-stack-item">
                 <div>
                   <p>{task.title}</p>
@@ -227,6 +234,9 @@ function Dashboard() {
                 <span className={`badge ${PRIORITY_META[task.priority]?.className}`}>{task.priority}</span>
               </div>
             ))}
+            {optimization.recommendedTasks.length === 0 ? (
+              <p className="text-muted">Optimization recommendations will appear when a sprint has backlog candidates.</p>
+            ) : null}
           </div>
         </Card>
 

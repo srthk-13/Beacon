@@ -53,9 +53,15 @@ function Navbar() {
         }
         return;
       }
-      const data = await invitationApi.getMyInvitations(user.id);
-      if (isMounted) {
-        setPendingInvites(data.filter((invite) => invite.status === "PENDING").length);
+      try {
+        const data = await invitationApi.getMyInvitations(user.id);
+        if (isMounted) {
+          setPendingInvites(data.filter((invite) => invite.status === "PENDING").length);
+        }
+      } catch {
+        if (isMounted) {
+          setPendingInvites(0);
+        }
       }
     };
 
