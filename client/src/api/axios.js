@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const DEFAULT_API_BASE_URL = "http://localhost:5001/api";
+const DEFAULT_API_BASE_URL = "http://localhost:5050/api";
 const REQUEST_TIMEOUT_MS = 6000;
 
 export const api = axios.create({
@@ -777,7 +777,7 @@ export const authApi = {
           headers: { Authorization: `Bearer ${token}` },
         });
         const payload = unwrapResponse(response);
-        return payload?.user ?? payload ?? DEMO_USER;
+        return toClientId(payload?.user ?? payload ?? DEMO_USER);
       },
       async () => {
         await delay(140);
@@ -1266,51 +1266,59 @@ export const analyticsApi = {
   },
 
   async getDashboardOverview() {
-    await delay();
-    const db = loadDemoDb();
-    const projects = db.projects.map((project) => buildProjectSnapshot(project));
-    const activeSprint = db.sprints.find((sprint) => sprint.status === "ACTIVE") ?? db.sprints[0];
-    const activeSprintAnalytics = activeSprint ? buildSprintAnalytics(activeSprint.id) : null;
-    const optimization = activeSprint ? buildOptimization(activeSprint.id) : buildOptimization("");
-
-    const teamLoad =
-      activeSprint &&
-      db.projects
-        .find((project) => project.id === activeSprint.projectId)
-        ?.teamMemberIds.map((memberId) => {
-          const member = getUserById(memberId);
-          const memberSprintPoints = sprintTasks(activeSprint.id)
-            .filter((task) => task.assignedTo === memberId)
-            .reduce((sum, task) => sum + task.storyPoints, 0);
-          return {
-            userId: memberId,
-            name: member?.name ?? "Unknown",
-            assignedPoints: memberSprintPoints,
-            capacityPerSprint: member?.capacityPerSprint ?? 0,
-          };
-        });
-
-    return {
-      averageVelocity:
-        projects.reduce((sum, project) => sum + (project.metrics.avgVelocity ?? 0), 0) /
-        Math.max(1, projects.length),
-      activeSprints: db.sprints.filter((sprint) => sprint.status === "ACTIVE").length,
-      portfolioHealth:
-        projects.reduce((sum, project) => sum + (project.metrics.healthScore ?? 0), 0) /
-        Math.max(1, projects.length),
-      overloadedPeople: activeSprintAnalytics?.overloadedUsers?.length ?? 0,
-      riskScore: activeSprintAnalytics?.riskScore ?? 0,
-      activeSprint: {
-        ...(activeSprint ?? {}),
-        projectName: activeSprint
-          ? db.projects.find((project) => project.id === activeSprint.projectId)?.name ?? "Unknown Project"
-          : "No Active Sprint",
-        ...(activeSprintAnalytics ?? {}),
+    return withFallback(
+      async () => {
+        const response = await api.get("/analytics/dashboard");
+        return unwrapResponse(response);
       },
-      optimization,
-      teamLoad: teamLoad ?? [],
-      projects,
-    };
+      async () => {
+        await delay();
+        const db = loadDemoDb();
+        const projects = db.projects.map((project) => buildProjectSnapshot(project));
+        const activeSprint = db.sprints.find((sprint) => sprint.status === "ACTIVE") ?? db.sprints[0];
+        const activeSprintAnalytics = activeSprint ? buildSprintAnalytics(activeSprint.id) : null;
+        const optimization = activeSprint ? buildOptimization(activeSprint.id) : buildOptimization("");
+
+        const teamLoad =
+          activeSprint &&
+          db.projects
+            .find((project) => project.id === activeSprint.projectId)
+            ?.teamMemberIds.map((memberId) => {
+              const member = getUserById(memberId);
+              const memberSprintPoints = sprintTasks(activeSprint.id)
+                .filter((task) => task.assignedTo === memberId)
+                .reduce((sum, task) => sum + task.storyPoints, 0);
+              return {
+                userId: memberId,
+                name: member?.name ?? "Unknown",
+                assignedPoints: memberSprintPoints,
+                capacityPerSprint: member?.capacityPerSprint ?? 0,
+              };
+            });
+
+        return {
+          averageVelocity:
+            projects.reduce((sum, project) => sum + (project.metrics.avgVelocity ?? 0), 0) /
+            Math.max(1, projects.length),
+          activeSprints: db.sprints.filter((sprint) => sprint.status === "ACTIVE").length,
+          portfolioHealth:
+            projects.reduce((sum, project) => sum + (project.metrics.healthScore ?? 0), 0) /
+            Math.max(1, projects.length),
+          overloadedPeople: activeSprintAnalytics?.overloadedUsers?.length ?? 0,
+          riskScore: activeSprintAnalytics?.riskScore ?? 0,
+          activeSprint: {
+            ...(activeSprint ?? {}),
+            projectName: activeSprint
+              ? db.projects.find((project) => project.id === activeSprint.projectId)?.name ?? "Unknown Project"
+              : "No Active Sprint",
+            ...(activeSprintAnalytics ?? {}),
+          },
+          optimization,
+          teamLoad: teamLoad ?? [],
+          projects,
+        };
+      },
+    );
   },
 };
 

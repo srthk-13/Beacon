@@ -1,45 +1,83 @@
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import User from "../modules/user/user.model.js";
-import bcrypt from "bcryptjs"
-import jwt from "jsonwebtoken"
+import { HttpError } from "../utils/httpError.js";
+import { generateUniqueUserCode } from "../utils/uniqueCode.js";
+
+const sanitizeUser = (user) => {
+  const payload = user.toObject ? user.toObject() : { ...user };
+  delete payload.passwordHash;
+  return payload;
+};
+
+const signToken = (user) =>
+  jwt.sign(
+    {
+      id: user._id,
+      role: user.role,
+      email: user.email,
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: "1d" },
+  );
+
 export const registerUser = async (data) => {
-  const { name, email, password, role } = data;
-  const exists = await User.findOne({ email });
-  if (exists) {
-    throw new Error("User already exists");
+  const { name, email, password, role, capacityPerSprint } = data;
+
+  if (!name || !email || !password) {
+    throw new HttpError(400, "Name, email, and password are required.");
   }
-  const hash = await bcrypt.hash(password, 10);
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const existing = await User.findOne({ email: normalizedEmail });
+  if (existing) {
+    throw new HttpError(409, "User already exists.");
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  const uniqueCode = await generateUniqueUserCode();
   const user = await User.create({
-    name,
-    email,
-    passwordHash: hash,
+    name: String(name).trim(),
+    email: normalizedEmail,
+    passwordHash,
+    uniqueCode,
     role: role || "DEVELOPER",
-  })
-  const token = jwt.sign({
-    id: user._id,
-    role: user.role,
-  },
-    process.env.JWT_SECRET,
-    { expiresIn: "1d" }
-  );
-  return { user, token };
-}
+    capacityPerSprint: Number(capacityPerSprint ?? 18),
+    avatarHue: Math.floor(Math.random() * 360),
+  });
+
+  const token = signToken(user);
+  return {
+    token,
+    user: sanitizeUser(user),
+  };
+};
+
 export const loginUser = async ({ email, password }) => {
-  const user = await User.findOne({ email });
-  if (!user) throw new Error("User Not Found");
-  const match = await bcrypt.compare(password, user.passwordHash);
-  if (!match) throw new Error("Invalid credentials");
-  const token = jwt.sign({
-    id: user._id,
-    role: user.role,
-  },
-    process.env.JWT_SECRET,
-    { expiresIn: "1d" }
-  );
-  return { user, token }
-}
+  if (!email || !password) {
+    throw new HttpError(400, "Email and password are required.");
+  }
+
+  const user = await User.findOne({ email: String(email).trim().toLowerCase() });
+  if (!user) {
+    throw new HttpError(401, "Invalid credentials.");
+  }
+
+  const matched = await bcrypt.compare(password, user.passwordHash);
+  if (!matched) {
+    throw new HttpError(401, "Invalid credentials.");
+  }
+
+  return {
+    token: signToken(user),
+    user: sanitizeUser(user),
+  };
+};
 
 export const getMeProfile = async (id) => {
   const user = await User.findById(id).select("-passwordHash");
-  if (!user) throw new Error("User Not Found");
+  if (!user) {
+    throw new HttpError(404, "User not found.");
+  }
   return user;
-}
+};

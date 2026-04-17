@@ -1,39 +1,21 @@
-import { loginUser, registerUser, getMeProfile } from "../services/auth.service.js";
+import { getMeProfile, loginUser, registerUser } from "../services/auth.service.js";
+import { sendSuccess } from "../utils/apiResponse.js";
 
 export const register = async (req, res) => {
-  try {
-    const { user, token } = await registerUser(req.body);
-    res.status(201).json({
-      message: "User Registered",
-      token,
-      user
-    })
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-}
+  const payload = await registerUser(req.body);
+  sendSuccess(res, payload, "User registered successfully.", 201);
+};
+
 export const login = async (req, res) => {
-  try {
-    const { user, token } = await loginUser(req.body);
-    res.status(200).json({
-      message: "Login successful",
-      token,
-      user,
-    });
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-}
-export const logout = async (req, res) => {
-  // JWT me server side logout nahi hota (stateless)
-  res.status(200).json({ message: "Logout successful" });
+  const payload = await loginUser(req.body);
+  sendSuccess(res, payload, "Login successful.");
+};
+
+export const logout = async (_req, res) => {
+  sendSuccess(res, null, "Logout successful.");
 };
 
 export const getMe = async (req, res) => {
-  try {
-    const user = await getMeProfile(req.user.id);
-    res.status(200).json({ user });
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
+  const user = await getMeProfile(req.user.id);
+  sendSuccess(res, user);
 };
